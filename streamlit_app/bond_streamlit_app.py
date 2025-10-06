@@ -1,44 +1,44 @@
 """
-Sector Rotation Strategy Dashboard - Streamlit Application
-========================================================
+Enhanced Sector Rotation Strategy Dashboard with Mean Reversion Testing (Clean Version)
+===================================================================================
 
-Interactive Streamlit application for mean reversion strategies across:
+Advanced Streamlit application that validates mean reversion assumptions before
+implementing strategies. Includes comprehensive statistical testing framework.
 
-Bond Sector Strategies:
-- HYG/TLT: High Yield vs Long Treasuries
-- LQD/IEF: Investment Grade vs Intermediate Treasuries  
-- JNK/TLT: Junk Bonds vs Long Treasuries
-- AGG/TLT: Aggregate Bonds vs Long Treasuries
-
-Geographic Sector Strategies:
-- SPY/EFA: US vs Developed International
-- SPY/EEM: US vs Emerging Markets
-- EFA/EEM: Developed vs Emerging
-- And 7 additional geographic pairs
+Features:
+- Statistical validation of mean reversion
+- Stationarity tests (ADF, KPSS)
+- Cointegration analysis
+- Half-life calculations
+- Hurst exponent analysis
+- Regime detection
+- Comprehensive pair screening
 
 Author: Research Team
-Date: September 2025
+Date: October 2025
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
+# Import our custom modules
+from mean_reversion_tests import MeanReversionTester
+
 # Page configuration
 st.set_page_config(
-    page_title="Sector Rotation Strategy Dashboard",
-    page_icon="📈",
+    page_title="Enhanced Mean Reversion Strategy Dashboard",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Bond strategy configurations
+# Strategy configurations
 BOND_STRATEGIES = {
     'HYG_TLT': {
         'symbols': ['HYG', 'TLT'],
@@ -66,7 +66,6 @@ BOND_STRATEGIES = {
     }
 }
 
-# Geographic strategy configurations (excluding VEJ - delisted)
 GEOGRAPHIC_STRATEGIES = {
     'SPY_EFA': {
         'symbols': ['SPY', 'EFA'],
@@ -97,40 +96,9 @@ GEOGRAPHIC_STRATEGIES = {
         'name': 'US vs Europe',
         'description': 'US Large Cap vs Europe',
         'color': '#6A994E'
-    },
-    'EEM_VGK': {
-        'symbols': ['EEM', 'VGK'],
-        'name': 'Emerging vs Europe',
-        'description': 'Emerging Markets vs Europe',
-        'color': '#8E44AD'
-    },
-    'FXI_EWJ': {
-        'symbols': ['FXI', 'EWJ'],
-        'name': 'China vs Japan',
-        'description': 'China Large Cap vs Japan',
-        'color': '#E74C3C'
-    },
-    'VTI_VEA': {
-        'symbols': ['VTI', 'VEA'],
-        'name': 'US Total vs Developed',
-        'description': 'US Total Market vs Developed Markets',
-        'color': '#3498DB'
-    },
-    'IWM_EFA': {
-        'symbols': ['IWM', 'EFA'],
-        'name': 'US Small Cap vs EAFE',
-        'description': 'US Small Cap vs EAFE Developed',
-        'color': '#1ABC9C'
-    },
-    'SPY_FXI': {
-        'symbols': ['SPY', 'FXI'],
-        'name': 'US vs China',
-        'description': 'US Large Cap vs China Large Cap',
-        'color': '#F39C12'
     }
 }
 
-# Factor ETF strategy configurations
 FACTOR_STRATEGIES = {
     'VUG_VYM': {
         'symbols': ['VUG', 'VYM'],
@@ -138,1586 +106,844 @@ FACTOR_STRATEGIES = {
         'description': 'Vanguard Growth ETF vs Vanguard High Dividend Yield ETF',
         'color': '#E74C3C'
     },
-    'VFVA_VUG': {
-        'symbols': ['VFVA', 'VUG'],
-        'name': 'Value vs Growth Factor',
-        'description': 'Vanguard U.S. Value Factor ETF vs Vanguard Growth ETF',
+    'VUG_VTV': {
+        'symbols': ['VUG', 'VTV'],
+        'name': 'Growth vs Value',
+        'description': 'Vanguard Growth ETF vs Vanguard Value ETF',
         'color': '#9B59B6'
     },
-    'VFQY_SPMO': {
-        'symbols': ['VFQY', 'SPMO'],
-        'name': 'Quality vs Momentum Factor',
-        'description': 'Vanguard U.S. Quality Factor ETF vs Invesco S&P 500 Momentum ETF',
+    'IWM_SPY': {
+        'symbols': ['IWM', 'SPY'],
+        'name': 'Small Cap vs Large Cap',
+        'description': 'Russell 2000 vs S&P 500',
         'color': '#3498DB'
-    },
-    'SIZE_VUG': {
-        'symbols': ['SIZE', 'VUG'],
-        'name': 'Size vs Growth Factor',
-        'description': 'iShares MSCI USA Size Factor ETF vs Vanguard Growth ETF',
-        'color': '#E67E22'
-    },
-    'VFVA_VFQY': {
-        'symbols': ['VFVA', 'VFQY'],
-        'name': 'Value vs Quality Factor',
-        'description': 'Vanguard U.S. Value Factor ETF vs Vanguard U.S. Quality Factor ETF',
-        'color': '#27AE60'
-    },
-    'VYM_SPMO': {
-        'symbols': ['VYM', 'SPMO'],
-        'name': 'Dividend vs Momentum',
-        'description': 'Vanguard High Dividend Yield ETF vs Invesco S&P 500 Momentum ETF',
-        'color': '#F39C12'
-    },
-    'SIZE_VYM': {
-        'symbols': ['SIZE', 'VYM'],
-        'name': 'Size vs Dividend Factor',
-        'description': 'iShares MSCI USA Size Factor ETF vs Vanguard High Dividend Yield ETF',
-        'color': '#1ABC9C'
-    },
-    'VFQY_VUG': {
-        'symbols': ['VFQY', 'VUG'],
-        'name': 'Quality vs Growth Factor',
-        'description': 'Vanguard U.S. Quality Factor ETF vs Vanguard Growth ETF',
-        'color': '#34495E'
     }
 }
 
-class BondStrategyEngine:
-    """Bond strategy calculation engine"""
-    
-    def __init__(self, lookback_years=5):
-        self.lookback_years = lookback_years
-        
-    @st.cache_data(ttl=3600)  # Cache for 1 hour
-    def fetch_data(_self, symbols):
-        """Fetch market data with caching"""
-        try:
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=_self.lookback_years * 365)
-            
-            with st.spinner(f"Fetching data for {', '.join(symbols)}..."):
-                data = yf.download(symbols, start=start_date, end=end_date, progress=False)
-            
-            if isinstance(data.columns, pd.MultiIndex):
-                data = data['Close']
-            elif isinstance(data, pd.Series):
-                data = data.to_frame(symbols[0])
-            
-            data = data.fillna(method='ffill').fillna(method='bfill')
-            
-            return data
-            
-        except Exception as e:
-            st.error(f"Error fetching data: {str(e)}")
-            return pd.DataFrame()
-    
-    def optimize_parameters(self, asset1_symbol, asset2_symbol, 
-                           start_date='2021-01-01', end_date='2024-12-31'):
-        """
-        Optimize strategy parameters using Sharpe ratio on in-sample data (2021-2024)
-        """
-        try:
-            # Parameter grids for optimization
-            windows = [20, 40, 60, 90, 120, 180, 252]
-            entry_thresholds = [1.0, 1.5, 2.0, 2.5, 3.0]
-            exit_thresholds = [0.1, 0.3, 0.5, 0.7, 1.0]
-            
-            # Fetch historical data for optimization period
-            symbols = [asset1_symbol, asset2_symbol]
-            data = yf.download(symbols, start=start_date, end=end_date, progress=False)
-            
-            if isinstance(data.columns, pd.MultiIndex):
-                data = data['Close']
-            
-            data = data.fillna(method='ffill').fillna(method='bfill')
-            
-            if data.empty or asset1_symbol not in data.columns or asset2_symbol not in data.columns:
-                return {'error': 'Data not available for optimization period'}
-            
-            price1 = data[asset1_symbol].dropna()
-            price2 = data[asset2_symbol].dropna()
-            
-            best_sharpe = -np.inf
-            best_params = None
-            best_in_sample_metrics = None
-            results = []
-            
-            total_combinations = len(windows) * len(entry_thresholds) * len(exit_thresholds)
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            combination_count = 0
-            
-            for window in windows:
-                for entry_thresh in entry_thresholds:
-                    for exit_thresh in exit_thresholds:
-                        combination_count += 1
-                        progress = combination_count / total_combinations
-                        progress_bar.progress(progress)
-                        status_text.text(f"Testing combination {combination_count}/{total_combinations}: window={window}, entry={entry_thresh}, exit={exit_thresh}")
-                        
-                        try:
-                            # Calculate strategy for this parameter combination
-                            common_dates = price1.index.intersection(price2.index)
-                            if len(common_dates) < window:
-                                continue
-                                
-                            price1_aligned = price1[common_dates]
-                            price2_aligned = price2[common_dates]
-                            
-                            # Calculate ratio and z-score
-                            ratio = price1_aligned / price2_aligned
-                            rolling_mean = ratio.rolling(window=window).mean()
-                            rolling_std = ratio.rolling(window=window).std()
-                            zscore = (ratio - rolling_mean) / rolling_std
-                            
-                            # Generate signals
-                            signals = pd.Series(0, index=zscore.index)
-                            position = 0
-                            
-                            for i in range(1, len(zscore)):
-                                if pd.isna(zscore.iloc[i]):
-                                    signals.iloc[i] = position
-                                    continue
-                                    
-                                current_zscore = zscore.iloc[i]
-                                
-                                if position == 0:
-                                    if current_zscore < -entry_thresh:
-                                        position = 1
-                                    elif current_zscore > entry_thresh:
-                                        position = -1
-                                elif abs(current_zscore) < exit_thresh:
-                                    position = 0
-                                
-                                signals.iloc[i] = position
-                            
-                            # Calculate returns
-                            returns1 = price1_aligned.pct_change()
-                            returns2 = price2_aligned.pct_change()
-                            strategy_returns = signals.shift(1) * (returns1 - returns2)
-                            strategy_returns = strategy_returns.fillna(0)
-                            
-                            # Calculate Sharpe ratio
-                            if len(strategy_returns) > 0 and strategy_returns.std() > 0:
-                                annualized_return = (1 + strategy_returns.mean()) ** 252 - 1
-                                annualized_vol = strategy_returns.std() * np.sqrt(252)
-                                sharpe_ratio = annualized_return / annualized_vol
-                                
-                                total_return = (1 + strategy_returns).prod() - 1
-                                cumulative = (1 + strategy_returns).cumprod()
-                                rolling_max = cumulative.expanding().max()
-                                drawdown = (cumulative - rolling_max) / rolling_max
-                                max_drawdown = drawdown.min()
-                                
-                                winning_trades = (strategy_returns > 0).sum()
-                                total_trades = (strategy_returns != 0).sum()
-                                win_rate = winning_trades / total_trades if total_trades > 0 else 0
-                                
-                                result = {
-                                    'window': window,
-                                    'entry_threshold': entry_thresh,
-                                    'exit_threshold': exit_thresh,
-                                    'sharpe_ratio': sharpe_ratio,
-                                    'total_return': total_return,
-                                    'annualized_return': annualized_return,
-                                    'annualized_vol': annualized_vol,
-                                    'max_drawdown': max_drawdown,
-                                    'win_rate': win_rate,
-                                    'total_trades': total_trades
-                                }
-                                
-                                results.append(result)
-                                
-                                if sharpe_ratio > best_sharpe:
-                                    best_sharpe = sharpe_ratio
-                                    best_params = {
-                                        'window': window,
-                                        'entry_threshold': entry_thresh,
-                                        'exit_threshold': exit_thresh
-                                    }
-                                    best_in_sample_metrics = {
-                                        'Total Return': total_return,
-                                        'Annualized Return': annualized_return,
-                                        'Sharpe Ratio': sharpe_ratio,
-                                        'Max Drawdown': max_drawdown,
-                                        'Win Rate': win_rate,
-                                        'Total Trades': total_trades
-                                    }
-                                    
-                        except Exception:
-                            continue
-            
-            progress_bar.empty()
-            status_text.empty()
-            
-            return {
-                'success': True,
-                'best_params': best_params,
-                'best_sharpe': best_sharpe,
-                'best_in_sample_metrics': best_in_sample_metrics,
-                'results': pd.DataFrame(results) if results else pd.DataFrame(),
-                'total_combinations': len(results)
-            }
-            
-        except Exception as e:
-            return {'error': f'Optimization failed: {str(e)}'}
-    
-    def calculate_out_of_sample(self, asset1_symbol, asset2_symbol, best_params,
-                               start_date='2025-01-01'):
-        """Calculate out-of-sample performance using optimized parameters"""
-        try:
-            end_date = datetime.now()
-            symbols = [asset1_symbol, asset2_symbol]
-            data = yf.download(symbols, start=start_date, end=end_date, progress=False)
-            
-            if isinstance(data.columns, pd.MultiIndex):
-                data = data['Close']
-            
-            data = data.fillna(method='ffill').fillna(method='bfill')
-            
-            if data.empty or asset1_symbol not in data.columns or asset2_symbol not in data.columns:
-                return {'error': 'Data not available for out-of-sample period'}
-            
-            # Apply optimized parameters
-            window = best_params['window']
-            entry_threshold = best_params['entry_threshold']
-            exit_threshold = best_params['exit_threshold']
-            
-            price1 = data[asset1_symbol].dropna()
-            price2 = data[asset2_symbol].dropna()
-            
-            common_dates = price1.index.intersection(price2.index)
-            if len(common_dates) < window:
-                return {'error': f'Insufficient out-of-sample data points: {len(common_dates)}'}
-            
-            price1_aligned = price1[common_dates]
-            price2_aligned = price2[common_dates]
-            
-            # Calculate ratio and z-score
-            ratio = price1_aligned / price2_aligned
-            rolling_mean = ratio.rolling(window=window).mean()
-            rolling_std = ratio.rolling(window=window).std()
-            zscore = (ratio - rolling_mean) / rolling_std
-            
-            # Generate signals
-            signals = pd.Series(0, index=zscore.index)
-            position = 0
-            
-            for i in range(1, len(zscore)):
-                if pd.isna(zscore.iloc[i]):
-                    signals.iloc[i] = position
-                    continue
-                    
-                current_zscore = zscore.iloc[i]
-                
-                if position == 0:
-                    if current_zscore < -entry_threshold:
-                        position = 1
-                    elif current_zscore > entry_threshold:
-                        position = -1
-                elif abs(current_zscore) < exit_threshold:
-                    position = 0
-                
-                signals.iloc[i] = position
-            
-            # Calculate returns
-            returns1 = price1_aligned.pct_change()
-            returns2 = price2_aligned.pct_change()
-            strategy_returns = signals.shift(1) * (returns1 - returns2)
-            strategy_returns = strategy_returns.fillna(0)
-            
-            # Performance metrics
-            total_return = (1 + strategy_returns).prod() - 1
-            annualized_return = (1 + total_return) ** (252 / len(strategy_returns)) - 1
-            annualized_vol = strategy_returns.std() * np.sqrt(252)
-            sharpe_ratio = annualized_return / annualized_vol if annualized_vol > 0 else 0
-            
-            cumulative = (1 + strategy_returns).cumprod()
-            rolling_max = cumulative.expanding().max()
-            drawdown = (cumulative - rolling_max) / rolling_max
-            max_drawdown = drawdown.min()
-            
-            winning_trades = (strategy_returns > 0).sum()
-            total_trades = (strategy_returns != 0).sum()
-            win_rate = winning_trades / total_trades if total_trades > 0 else 0
-            
-            downside_returns = strategy_returns[strategy_returns < 0]
-            downside_deviation = downside_returns.std() * np.sqrt(252) if len(downside_returns) > 0 else 0
-            sortino_ratio = annualized_return / downside_deviation if downside_deviation > 0 else 0
-            
-            return {
-                'success': True,
-                'ratio': ratio,
-                'zscore': zscore,
-                'signals': signals,
-                'returns': strategy_returns,
-                'cumulative_returns': cumulative,
-                'price1': price1_aligned,
-                'price2': price2_aligned,
-                'metrics': {
-                    'Total Return': total_return,
-                    'Annualized Return': annualized_return,
-                    'Annualized Volatility': annualized_vol,
-                    'Sharpe Ratio': sharpe_ratio,
-                    'Sortino Ratio': sortino_ratio,
-                    'Max Drawdown': max_drawdown,
-                    'Win Rate': win_rate,
-                    'Total Trades': total_trades
-                },
-                'current_signals': {
-                    'ratio': ratio.iloc[-1] if len(ratio) > 0 else np.nan,
-                    'zscore': zscore.iloc[-1] if len(zscore) > 0 else np.nan,
-                    'signal': signals.iloc[-1] if len(signals) > 0 else 0
-                },
-                'parameters': best_params
-            }
-            
-        except Exception as e:
-            return {'error': f'Out-of-sample calculation failed: {str(e)}'}
-
-    def calculate_strategy(self, asset1_symbol, asset2_symbol, window=60, 
-                          entry_threshold=2.0, exit_threshold=0.5):
-        """Calculate complete strategy analysis"""
-        try:
-            symbols = [asset1_symbol, asset2_symbol]
-            data = self.fetch_data(symbols)
-            
-            if data.empty or asset1_symbol not in data.columns or asset2_symbol not in data.columns:
-                return {'error': f'Data not available for {asset1_symbol}/{asset2_symbol}'}
-            
-            price1 = data[asset1_symbol].dropna()
-            price2 = data[asset2_symbol].dropna()
-            
-            common_dates = price1.index.intersection(price2.index)
-            if len(common_dates) < window:
-                return {'error': f'Insufficient data points: {len(common_dates)}'}
-            
-            price1_aligned = price1[common_dates]
-            price2_aligned = price2[common_dates]
-            
-            # Calculate ratio and z-score
-            ratio = price1_aligned / price2_aligned
-            rolling_mean = ratio.rolling(window=window).mean()
-            rolling_std = ratio.rolling(window=window).std()
-            zscore = (ratio - rolling_mean) / rolling_std
-            
-            # Generate signals
-            signals = pd.Series(0, index=zscore.index)
-            position = 0
-            
-            for i in range(1, len(zscore)):
-                if pd.isna(zscore.iloc[i]):
-                    signals.iloc[i] = position
-                    continue
-                    
-                current_zscore = zscore.iloc[i]
-                
-                if position == 0:
-                    if current_zscore < -entry_threshold:
-                        position = 1  # Long ratio
-                    elif current_zscore > entry_threshold:
-                        position = -1  # Short ratio
-                elif abs(current_zscore) < exit_threshold:
-                    position = 0
-                
-                signals.iloc[i] = position
-            
-            # Calculate returns
-            returns1 = price1_aligned.pct_change()
-            returns2 = price2_aligned.pct_change()
-            strategy_returns = signals.shift(1) * (returns1 - returns2)
-            strategy_returns = strategy_returns.fillna(0)
-            
-            # Performance metrics
-            total_return = (1 + strategy_returns).prod() - 1
-            annualized_return = (1 + total_return) ** (252 / len(strategy_returns)) - 1
-            annualized_vol = strategy_returns.std() * np.sqrt(252)
-            sharpe_ratio = annualized_return / annualized_vol if annualized_vol > 0 else 0
-            
-            cumulative = (1 + strategy_returns).cumprod()
-            rolling_max = cumulative.expanding().max()
-            drawdown = (cumulative - rolling_max) / rolling_max
-            max_drawdown = drawdown.min()
-            
-            winning_trades = (strategy_returns > 0).sum()
-            total_trades = (strategy_returns != 0).sum()
-            win_rate = winning_trades / total_trades if total_trades > 0 else 0
-            
-            downside_returns = strategy_returns[strategy_returns < 0]
-            downside_deviation = downside_returns.std() * np.sqrt(252) if len(downside_returns) > 0 else 0
-            sortino_ratio = annualized_return / downside_deviation if downside_deviation > 0 else 0
-            
-            return {
-                'success': True,
-                'ratio': ratio,
-                'zscore': zscore,
-                'signals': signals,
-                'returns': strategy_returns,
-                'cumulative_returns': cumulative,
-                'price1': price1_aligned,
-                'price2': price2_aligned,
-                'metrics': {
-                    'Total Return': total_return,
-                    'Annualized Return': annualized_return,
-                    'Annualized Volatility': annualized_vol,
-                    'Sharpe Ratio': sharpe_ratio,
-                    'Sortino Ratio': sortino_ratio,
-                    'Max Drawdown': max_drawdown,
-                    'Win Rate': win_rate,
-                    'Total Trades': total_trades
-                },
-                'current_signals': {
-                    'ratio': ratio.iloc[-1] if len(ratio) > 0 else np.nan,
-                    'zscore': zscore.iloc[-1] if len(zscore) > 0 else np.nan,
-                    'signal': signals.iloc[-1] if len(signals) > 0 else 0
-                },
-                'parameters': {
-                    'window': window,
-                    'entry_threshold': entry_threshold,
-                    'exit_threshold': exit_threshold
-                }
-            }
-            
-        except Exception as e:
-            return {'error': f'Strategy calculation failed: {str(e)}'}
-
-# Initialize engine
-if 'engine' not in st.session_state:
-    st.session_state.engine = BondStrategyEngine()
+# Initialize tester
+if 'tester' not in st.session_state:
+    st.session_state.tester = MeanReversionTester()
 
 def main():
     """Main application function"""
     
     # Header
-    st.title("Sector Rotation Strategy Dashboard")
-    st.markdown("### Analyze mean reversion strategies across bond, geographic, and factor investing sectors")
+    st.title("Enhanced Mean Reversion Strategy Dashboard")
+    st.markdown("### Statistical validation and analysis of mean reversion strategies")
     
-    # Sidebar strategy type selection
-    strategy_type = st.sidebar.radio(
-        "Strategy Type:",
-        ["Bond Strategies", "Geographic Strategies", "Factor Strategies"],
+    # Sidebar navigation
+    analysis_type = st.sidebar.radio(
+        "Analysis Type:",
+        [
+            "Single Pair Analysis", 
+            "Multiple Pair Screening",
+            "Strategy Implementation",
+            "Quick Strategy Overview",
+            "Scoring Methodology"
+        ],
         index=0
     )
     
-    # Clear main content and show appropriate strategy
-    if strategy_type == "Bond Strategies":
-        bond_strategy_tab()
-    elif strategy_type == "Geographic Strategies":
-        geographic_strategy_tab()
+    if analysis_type == "Single Pair Analysis":
+        single_pair_analysis()
+    elif analysis_type == "Multiple Pair Screening":
+        multiple_pair_screening()
+    elif analysis_type == "Strategy Implementation":
+        strategy_implementation()
+    elif analysis_type == "Scoring Methodology":
+        scoring_methodology()
     else:
-        factor_strategy_tab()
+        quick_overview()
 
-def bond_strategy_tab():
-    """Bond strategy tab content"""
-    st.header("Bond Sector Rotation Strategies")
-    st.markdown("Credit cycle and duration risk strategies across bond sectors")
+def single_pair_analysis():
+    """Detailed analysis of a single trading pair"""
+    st.header("Single Pair Statistical Analysis")
+    st.markdown("Comprehensive mean reversion testing for individual trading pairs")
     
-    # Sidebar - Strategy Selection
-    st.sidebar.header("Bond Strategy Configuration")
+    # Sidebar configuration
+    st.sidebar.header("Pair Configuration")
     
-    # Strategy selection
-    strategy_options = list(BOND_STRATEGIES.keys())
-    
-    selected_strategy = st.sidebar.selectbox(
-        "Select Bond Strategy:",
-        options=strategy_options,
-        format_func=lambda x: f"{BOND_STRATEGIES[x]['name']} ({'/'.join(BOND_STRATEGIES[x]['symbols'])})",
-        index=0,
-        key="bond_strategy_select"
+    # Strategy category selection
+    strategy_category = st.sidebar.selectbox(
+        "Strategy Category:",
+        ["Bond Strategies", "Geographic Strategies", "Factor Strategies", "Custom Pair"],
+        index=0
     )
     
-    # Parameter controls
-    st.sidebar.subheader("Parameters")
-    
-    window = st.sidebar.slider(
-        "Lookback Window (days):",
-        min_value=20, max_value=252, value=60, step=10,
-        help="Rolling window for calculating statistics",
-        key="bond_window"
-    )
-    
-    entry_threshold = st.sidebar.slider(
-        "Entry Threshold (σ):",
-        min_value=1.0, max_value=3.0, value=2.0, step=0.25,
-        help="Z-score threshold for entering positions",
-        key="bond_entry"
-    )
-    
-    exit_threshold = st.sidebar.slider(
-        "Exit Threshold (σ):",
-        min_value=0.1, max_value=1.0, value=0.5, step=0.1,
-        help="Z-score threshold for exiting positions",
-        key="bond_exit"
-    )
-    
-    # Refresh button
-    if st.sidebar.button("Refresh Data", type="primary", key="bond_refresh"):
-        st.cache_data.clear()
-        st.rerun()
-    
-    # Optimization section
-    st.sidebar.header("Parameter Optimization")
-    st.sidebar.markdown("**Optimize parameters using 2021-2024 data**")
-    
-    if st.sidebar.button("Optimize Parameters", type="secondary", key="bond_optimize"):
-        st.session_state.run_optimization = True
-    
-    # Get strategy configuration
-    config = BOND_STRATEGIES[selected_strategy]
-    symbols = config['symbols']
-    
-    # Calculate strategy
-    with st.spinner("Calculating strategy..."):
-        result = st.session_state.engine.calculate_strategy(
-            symbols[0], symbols[1], 
-            window, entry_threshold, exit_threshold
-        )
-    
-    if result.get('error'):
-        st.error(f"Error: {result['error']}")
-        return
-    
-    # Display strategy info
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader(f"{config['name']}")
-        st.write(config['description'])
-        st.write(f"**Symbols:** {' vs '.join(symbols)}")
-    
-    with col2:
-        # Current signal badge
-        current_signals = result.get('current_signals', {})
-        signal_val = current_signals.get('signal', 0)
-        zscore_val = current_signals.get('zscore', 0)
-        
-        if signal_val > 0:
-            st.success(f"LONG {symbols[0]}")
-            st.write(f"**Action:** Buy {symbols[0]}, Sell {symbols[1]}")
-        elif signal_val < 0:
-            st.error(f"SHORT {symbols[0]}")
-            st.write(f"**Action:** Sell {symbols[0]}, Buy {symbols[1]}")
+    if strategy_category == "Custom Pair":
+        symbol1 = st.sidebar.text_input("First Symbol:", value="SPY").upper()
+        symbol2 = st.sidebar.text_input("Second Symbol:", value="QQQ").upper()
+        pair_name = f"{symbol1}/{symbol2}"
+    else:
+        # Select from predefined strategies
+        if strategy_category == "Bond Strategies":
+            strategies = BOND_STRATEGIES
+        elif strategy_category == "Geographic Strategies":
+            strategies = GEOGRAPHIC_STRATEGIES
         else:
-            st.warning("NEUTRAL")
-            st.write("**Action:** No position")
+            strategies = FACTOR_STRATEGIES
         
-        st.write(f"**Current Z-Score:** {zscore_val:+.2f}")
+        selected_strategy = st.sidebar.selectbox(
+            "Select Strategy:",
+            list(strategies.keys()),
+            format_func=lambda x: f"{strategies[x]['name']}"
+        )
+        
+        symbol1, symbol2 = strategies[selected_strategy]['symbols']
+        pair_name = strategies[selected_strategy]['name']
     
-    # Performance metrics
-    metrics = result.get('metrics', {})
+    # Analysis parameters
+    period = st.sidebar.selectbox(
+        "Data Period:",
+        ["1y", "2y", "3y", "5y", "max"],
+        index=3
+    )
     
-    # Metrics row
+    # Run analysis button
+    if st.sidebar.button("Run Statistical Analysis", type="primary"):
+        st.session_state.run_single_analysis = True
+        st.session_state.analysis_symbols = (symbol1, symbol2, pair_name, period)
+    
+    # Display analysis results
+    if st.session_state.get('run_single_analysis', False):
+        symbol1, symbol2, pair_name, period = st.session_state.analysis_symbols
+        
+        with st.spinner(f"Running comprehensive analysis for {symbol1}/{symbol2}..."):
+            result = st.session_state.tester.comprehensive_pair_analysis(
+                symbol1, symbol2, pair_name, period
+            )
+        
+        if 'error' in result:
+            st.error(f"Analysis failed: {result['error']}")
+            return
+        
+        # Display results
+        display_single_pair_results(result)
+        
+        # Reset flag
+        st.session_state.run_single_analysis = False
+
+def display_single_pair_results(result):
+    """Display comprehensive results for a single pair"""
+    
+    # Header with key metrics
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
+        score = result['mean_reversion_score']
         st.metric(
-            "Total Return",
-            f"{metrics.get('Total Return', 0):.1%}",
-            help="Total strategy return over the period"
+            "Mean Reversion Score",
+            f"{score:.2f}",
+            help="Composite score from 0 (no mean reversion) to 1 (strong mean reversion)"
         )
     
     with col2:
-        st.metric(
-            "Sharpe Ratio",
-            f"{metrics.get('Sharpe Ratio', 0):.2f}",
-            help="Risk-adjusted return measure"
-        )
+        stationarity = result['ratio_stationarity']
+        if 'error' not in stationarity:
+            status = "Pass" if 'Stationary' in stationarity['conclusion'] else "Fail"
+        else:
+            status = "Error"
+        st.metric("Stationarity Test", status)
     
     with col3:
-        st.metric(
-            "Max Drawdown",
-            f"{metrics.get('Max Drawdown', 0):.1%}",
-            help="Maximum peak-to-trough decline"
-        )
+        cointegration = result['cointegration']
+        if 'error' not in cointegration:
+            status = "Pass" if cointegration['cointegrated'] else "Fail"
+        else:
+            status = "Error"
+        st.metric("Cointegration Test", status)
     
     with col4:
-        st.metric(
-            "Win Rate",
-            f"{metrics.get('Win Rate', 0):.1%}",
-            help="Percentage of profitable trades"
-        )
+        half_life = result['half_life']
+        if 'error' not in half_life:
+            hl_days = half_life['half_life_days']
+            if hl_days < np.inf:
+                st.metric("Half-Life", f"{hl_days:.0f} days")
+            else:
+                st.metric("Half-Life", "∞ (No reversion)")
+        else:
+            st.metric("Half-Life", "Error")
     
-    # Charts
-    st.subheader("Strategy Analysis")
+    # Recommendation banner
+    recommendation = result['recommendation']
+    if "Strong" in recommendation:
+        st.success(f"**Recommendation:** {recommendation}")
+    elif "Moderate" in recommendation:
+        st.warning(f"**Recommendation:** {recommendation}")
+    else:
+        st.error(f"**Recommendation:** {recommendation}")
     
-    # Create 4-panel chart
+    # Detailed test results
+    st.subheader("Detailed Test Results")
+    
+    # Create tabs for different tests
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Stationarity", "Cointegration", "Half-Life", "Hurst Exponent", "Regime Analysis"
+    ])
+    
+    with tab1:
+        display_stationarity_results(result['ratio_stationarity'])
+    
+    with tab2:
+        display_cointegration_results(result['cointegration'])
+    
+    with tab3:
+        display_half_life_results(result['half_life'])
+    
+    with tab4:
+        display_hurst_results(result['hurst'])
+    
+    with tab5:
+        display_regime_results(result['regime_detection'])
+    
+    # Visualization
+    st.subheader("Visual Analysis")
+    create_comprehensive_charts(result)
+
+def display_stationarity_results(stationarity):
+    """Display stationarity test results"""
+    if 'error' in stationarity:
+        st.error(f"Stationarity test error: {stationarity['error']}")
+        return
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Augmented Dickey-Fuller Test**")
+        st.write(f"• Statistic: {stationarity['adf_statistic']:.4f}")
+        st.write(f"• P-value: {stationarity['adf_pvalue']:.4f}")
+        st.write(f"• Critical Value (5%): {stationarity['adf_critical_5pct']:.4f}")
+        st.write(f"• Result: {'Stationary' if stationarity['is_stationary_adf'] else 'Non-stationary'}")
+    
+    with col2:
+        st.markdown("**KPSS Test**")
+        st.write(f"• Statistic: {stationarity['kpss_statistic']:.4f}")
+        st.write(f"• P-value: {stationarity['kpss_pvalue']:.4f}")
+        st.write(f"• Critical Value (5%): {stationarity['kpss_critical_5pct']:.4f}")
+        st.write(f"• Result: {'Stationary' if stationarity['is_stationary_kpss'] else 'Non-stationary'}")
+    
+    st.info(f"**Overall Conclusion:** {stationarity['conclusion']} (Confidence: {stationarity['confidence']})")
+
+def display_cointegration_results(cointegration):
+    """Display cointegration test results"""
+    if 'error' in cointegration:
+        st.error(f"Cointegration test error: {cointegration['error']}")
+        return
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Engle-Granger Cointegration Test**")
+        st.write(f"• Test Statistic: {cointegration['coint_statistic']:.4f}")
+        st.write(f"• P-value: {cointegration['coint_pvalue']:.4f}")
+        st.write(f"• Critical Value (5%): {cointegration['coint_critical_5pct']:.4f}")
+        st.write(f"• Result: {'Cointegrated' if cointegration['cointegrated'] else 'Not cointegrated'}")
+    
+    with col2:
+        st.markdown("**Cointegration Details**")
+        st.write(f"• Hedge Ratio: {cointegration['hedge_ratio']:.4f}")
+        st.write(f"• Direction: {cointegration['direction']}")
+        st.write(f"• Sample Size: {cointegration['sample_size']} observations")
+
+def display_half_life_results(half_life):
+    """Display half-life calculation results"""
+    if 'error' in half_life:
+        st.error(f"Half-life calculation error: {half_life['error']}")
+        return
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Mean Reversion Analysis**")
+        hl_days = half_life['half_life_days']
+        if hl_days < np.inf:
+            st.write(f"• Half-Life: {hl_days:.1f} days")
+            st.write(f"• Time to 90% reversion: ~{hl_days * 3.3:.0f} days")
+        else:
+            st.write("• Half-Life: ∞ (No mean reversion)")
+        
+        st.write(f"• Mean Reversion: {'Yes' if half_life['is_mean_reverting'] else 'No'}")
+        st.write(f"• Reversion Strength: {half_life['reversion_strength']:.4f}")
+    
+    with col2:
+        st.markdown("**Statistical Details**")
+        st.write(f"• AR(1) Coefficient: {half_life['mean_revert_coefficient']:.4f}")
+        st.write(f"• Coefficient P-value: {half_life['coefficient_pvalue']:.4f}")
+        st.write(f"• R-squared: {half_life['r_squared']:.4f}")
+        st.write(f"• Sample Size: {half_life['sample_size']} observations")
+
+def display_hurst_results(hurst):
+    """Display Hurst exponent results"""
+    if 'error' in hurst:
+        st.error(f"Hurst exponent calculation error: {hurst['error']}")
+        return
+    
+    hurst_value = hurst['hurst_exponent']
+    interpretation = hurst['interpretation']
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Hurst Exponent Analysis**")
+        st.write(f"• Hurst Exponent: {hurst_value:.4f}")
+        st.write(f"• Interpretation: {interpretation}")
+        
+        if hurst_value < 0.45:
+            st.success("Strong mean reversion tendency")
+        elif hurst_value < 0.5:
+            st.info("Weak mean reversion tendency")
+        elif hurst_value > 0.55:
+            st.warning("Trending behavior")
+        else:
+            st.info("Random walk behavior")
+    
+    with col2:
+        st.markdown("**Analysis Details**")
+        st.write(f"• Sample Size: {hurst['sample_size']} observations")
+        st.write(f"• Lags Used: {hurst['lags_used']}")
+        st.write("• **Hurst Interpretation:**")
+        st.write("  - H < 0.5: Mean reverting")
+        st.write("  - H = 0.5: Random walk")
+        st.write("  - H > 0.5: Trending")
+
+def display_regime_results(regime_detection):
+    """Display regime detection results"""
+    if 'error' in regime_detection:
+        st.error(f"Regime detection error: {regime_detection['error']}")
+        return
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Regime Analysis**")
+        st.write(f"• Number of Regime Changes: {regime_detection['num_regime_changes']}")
+        st.write(f"• Average Regime Length: {regime_detection['avg_regime_length_days']:.1f} days")
+        st.write(f"• Current Regime: {regime_detection['current_regime']}")
+    
+    with col2:
+        st.markdown("**Regime Characteristics**")
+        regime_0 = regime_detection['regime_0_characteristics']
+        regime_1 = regime_detection['regime_1_characteristics']
+        
+        st.write("**Regime 0:**")
+        st.write(f"  - Volatility: {regime_0['volatility']:.4f}")
+        st.write(f"  - Autocorr: {regime_0['autocorr']:.4f}")
+        st.write(f"  - Periods: {regime_0['periods']}")
+        
+        st.write("**Regime 1:**")
+        st.write(f"  - Volatility: {regime_1['volatility']:.4f}")
+        st.write(f"  - Autocorr: {regime_1['autocorr']:.4f}")
+        st.write(f"  - Periods: {regime_1['periods']}")
+
+def create_comprehensive_charts(result):
+    """Create comprehensive visualization charts"""
+    price_data = result['price_data']
+    ratio = price_data['ratio']
+    price1 = price_data['price1']
+    price2 = price_data['price2']
+    
+    # Create subplots
     fig = make_subplots(
         rows=4, cols=1,
         subplot_titles=[
-            f'Price Evolution: {" vs ".join(symbols)}',
-            'Price Ratio',
-            'Z-Score with Entry/Exit Thresholds',
-            'Cumulative Strategy Returns'
+            f"Price Evolution: {result['symbol1']} vs {result['symbol2']}",
+            "Price Ratio",
+            "Rolling Stationarity Analysis",
+            "Regime Detection"
         ],
         vertical_spacing=0.08
     )
     
-    # Get data
-    ratio = result['ratio']
-    zscore = result['zscore']
-    signals = result['signals']
-    cumulative = result['cumulative_returns']
-    price1 = result['price1']
-    price2 = result['price2']
-    
-    # 1. Price Evolution
+    # 1. Price evolution
     fig.add_trace(
         go.Scatter(x=price1.index, y=price1.values, 
-                  name=symbols[0], line=dict(color='blue')),
+                  name=result['symbol1'], line=dict(color='blue')),
         row=1, col=1
     )
     fig.add_trace(
         go.Scatter(x=price2.index, y=price2.values, 
-                  name=symbols[1], line=dict(color='red')),
+                  name=result['symbol2'], line=dict(color='red')),
         row=1, col=1
     )
     
-    # 2. Price Ratio
+    # 2. Price ratio
     fig.add_trace(
         go.Scatter(x=ratio.index, y=ratio.values, 
                   name='Price Ratio', line=dict(color='purple')),
         row=2, col=1
     )
     
-    # 3. Z-Score with thresholds
-    fig.add_trace(
-        go.Scatter(x=zscore.index, y=zscore.values, 
-                  name='Z-Score', line=dict(color='black')),
-        row=3, col=1
-    )
+    # Add rolling mean and bands
+    if len(ratio) > 60:
+        rolling_mean = ratio.rolling(60).mean()
+        rolling_std = ratio.rolling(60).std()
+        
+        fig.add_trace(
+            go.Scatter(x=rolling_mean.index, y=rolling_mean.values,
+                      name='60-day Mean', line=dict(color='orange', dash='dash')),
+            row=2, col=1
+        )
+        
+        fig.add_trace(
+            go.Scatter(x=rolling_mean.index, y=rolling_mean + 2*rolling_std,
+                      fill=None, mode='lines', line_color='rgba(0,0,0,0)', showlegend=False),
+            row=2, col=1
+        )
+        fig.add_trace(
+            go.Scatter(x=rolling_mean.index, y=rolling_mean - 2*rolling_std,
+                      fill='tonexty', mode='lines', line_color='rgba(0,0,0,0)',
+                      name='±2σ Band', fillcolor='rgba(128,128,128,0.2)'),
+            row=2, col=1
+        )
     
-    fig.add_hline(y=entry_threshold, line_dash="dash", line_color="red", row=3, col=1)
-    fig.add_hline(y=-entry_threshold, line_dash="dash", line_color="red", row=3, col=1)
-    fig.add_hline(y=exit_threshold, line_dash="dot", line_color="orange", row=3, col=1)
-    fig.add_hline(y=-exit_threshold, line_dash="dot", line_color="orange", row=3, col=1)
-    fig.add_hline(y=0, line_dash="solid", line_color="gray", row=3, col=1)
+    # 3. Rolling stationarity (if available)
+    rolling_results = result.get('rolling_stationarity', {})
+    if 'rolling_results' in rolling_results:
+        rolling_df = rolling_results['rolling_results']
+        fig.add_trace(
+            go.Scatter(x=rolling_df['date'], y=rolling_df['adf_pvalue'],
+                      name='ADF P-value', line=dict(color='green')),
+            row=3, col=1
+        )
+        fig.add_hline(y=0.05, line_dash="dash", line_color="red", row=3, col=1)
     
-    # 4. Cumulative Returns
-    fig.add_trace(
-        go.Scatter(x=cumulative.index, y=cumulative.values, 
-                  name='Strategy Returns', line=dict(color='green', width=2)),
-        row=4, col=1
-    )
+    # 4. Regime detection (if available)
+    regime_results = result.get('regime_detection', {})
+    if 'regime_series' in regime_results:
+        regime_series = regime_results['regime_series']
+        fig.add_trace(
+            go.Scatter(x=regime_series.index, y=regime_series.values,
+                      name='Regime', mode='markers', marker=dict(color=regime_series.values, colorscale='viridis')),
+            row=4, col=1
+        )
     
-    fig.update_layout(height=800, showlegend=True, title_text=f"Bond Strategy Analysis: {config['name']}")
+    fig.update_layout(height=1000, showlegend=True, 
+                     title_text=f"Comprehensive Analysis: {result['pair_name']}")
     fig.update_xaxes(showgrid=True)
     fig.update_yaxes(showgrid=True)
     
     st.plotly_chart(fig, use_container_width=True)
-    
-    # Performance Table
-    st.subheader("Detailed Performance Metrics")
-    
-    performance_data = {
-        "Metric": [
-            "Total Return", "Annualized Return", "Annualized Volatility",
-            "Sharpe Ratio", "Sortino Ratio", "Max Drawdown", 
-            "Win Rate", "Total Trades"
-        ],
-        "Value": [
-            f"{metrics.get('Total Return', 0):.2%}",
-            f"{metrics.get('Annualized Return', 0):.2%}",
-            f"{metrics.get('Annualized Volatility', 0):.2%}",
-            f"{metrics.get('Sharpe Ratio', 0):.3f}",
-            f"{metrics.get('Sortino Ratio', 0):.3f}",
-            f"{metrics.get('Max Drawdown', 0):.2%}",
-            f"{metrics.get('Win Rate', 0):.1%}",
-            f"{metrics.get('Total Trades', 0):.0f}"
-        ]
-    }
-    
-    performance_df = pd.DataFrame(performance_data)
-    st.dataframe(performance_df, use_container_width=True, hide_index=True)
-    
-    # Strategy Parameters
-    with st.expander("Current Strategy Parameters"):
-        params = result.get('parameters', {})
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.write(f"**Lookback Window:** {params.get('window', 0)} days")
-        with col2:
-            st.write(f"**Entry Threshold:** ±{params.get('entry_threshold', 0)} σ")
-        with col3:
-            st.write(f"**Exit Threshold:** ±{params.get('exit_threshold', 0)} σ")
-    
-    # Parameter Optimization Section
-    if st.session_state.get('run_optimization', False):
-        st.header("Parameter Optimization & Out-of-Sample Testing")
-        
-        with st.spinner("Running parameter optimization on 2021-2024 data..."):
-            optimization_result = st.session_state.engine.optimize_parameters(
-                symbols[0], symbols[1]
-            )
-        
-        if optimization_result.get('error'):
-            st.error(f"Optimization failed: {optimization_result['error']}")
-        elif optimization_result.get('success'):
-            best_params = optimization_result['best_params']
-            best_sharpe = optimization_result['best_sharpe']
-            best_in_sample_metrics = optimization_result['best_in_sample_metrics']
-            
-            st.success(f"Optimization completed! Best Sharpe ratio: {best_sharpe:.3f}")
-            
-            # Display best parameters
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Best Window", f"{best_params['window']} days")
-            with col2:
-                st.metric("Best Entry Threshold", f"±{best_params['entry_threshold']} σ")
-            with col3:
-                st.metric("Best Exit Threshold", f"±{best_params['exit_threshold']} σ")
-            
-            # Calculate out-of-sample performance
-            with st.spinner("Calculating out-of-sample performance on 2025+ data..."):
-                oos_result = st.session_state.engine.calculate_out_of_sample(
-                    symbols[0], symbols[1], best_params
-                )
-            
-            if oos_result.get('error'):
-                st.error(f"Out-of-sample calculation failed: {oos_result['error']}")
-            elif oos_result.get('success'):
-                oos_metrics = oos_result['metrics']
-                
-                # Performance comparison table
-                st.subheader("In-Sample vs Out-of-Sample Performance")
-                
-                comparison_data = {
-                    "Metric": [
-                        "Total Return", "Annualized Return", "Sharpe Ratio", 
-                        "Max Drawdown", "Win Rate", "Total Trades"
-                    ],
-                    "In-Sample (2021-2024)": [
-                        f"{best_in_sample_metrics.get('Total Return', 0):.2%}",
-                        f"{best_in_sample_metrics.get('Annualized Return', 0):.2%}",
-                        f"{best_in_sample_metrics.get('Sharpe Ratio', 0):.3f}",
-                        f"{best_in_sample_metrics.get('Max Drawdown', 0):.2%}",
-                        f"{best_in_sample_metrics.get('Win Rate', 0):.1%}",
-                        f"{best_in_sample_metrics.get('Total Trades', 0):.0f}"
-                    ],
-                    "Out-of-Sample (2025+)": [
-                        f"{oos_metrics.get('Total Return', 0):.2%}",
-                        f"{oos_metrics.get('Annualized Return', 0):.2%}",
-                        f"{oos_metrics.get('Sharpe Ratio', 0):.3f}",
-                        f"{oos_metrics.get('Max Drawdown', 0):.2%}",
-                        f"{oos_metrics.get('Win Rate', 0):.1%}",
-                        f"{oos_metrics.get('Total Trades', 0):.0f}"
-                    ]
-                }
-                
-                comparison_df = pd.DataFrame(comparison_data)
-                st.dataframe(comparison_df, use_container_width=True, hide_index=True)
-                
-                # Out-of-sample chart
-                st.subheader("Out-of-Sample Strategy Performance (2025+)")
-                
-                oos_ratio = oos_result['ratio']
-                oos_zscore = oos_result['zscore']
-                oos_cumulative = oos_result['cumulative_returns']
-                oos_signals = oos_result['signals']
-                
-                oos_fig = make_subplots(
-                    rows=3, cols=1,
-                    subplot_titles=[
-                        'Price Ratio (Out-of-Sample)',
-                        'Z-Score with Optimized Thresholds',
-                        'Cumulative Returns (Out-of-Sample)'
-                    ],
-                    vertical_spacing=0.1
-                )
-                
-                # Price ratio
-                oos_fig.add_trace(
-                    go.Scatter(x=oos_ratio.index, y=oos_ratio.values, 
-                              name='Price Ratio', line=dict(color='blue')),
-                    row=1, col=1
-                )
-                
-                # Z-score with thresholds
-                oos_fig.add_trace(
-                    go.Scatter(x=oos_zscore.index, y=oos_zscore.values, 
-                              name='Z-Score', line=dict(color='black')),
-                    row=2, col=1
-                )
-                
-                oos_fig.add_hline(y=best_params['entry_threshold'], line_dash="dash", 
-                                 line_color="red", row=2, col=1)
-                oos_fig.add_hline(y=-best_params['entry_threshold'], line_dash="dash", 
-                                 line_color="red", row=2, col=1)
-                oos_fig.add_hline(y=best_params['exit_threshold'], line_dash="dot", 
-                                 line_color="orange", row=2, col=1)
-                oos_fig.add_hline(y=-best_params['exit_threshold'], line_dash="dot", 
-                                 line_color="orange", row=2, col=1)
-                oos_fig.add_hline(y=0, line_dash="solid", line_color="gray", row=2, col=1)
-                
-                # Cumulative returns
-                oos_fig.add_trace(
-                    go.Scatter(x=oos_cumulative.index, y=oos_cumulative.values, 
-                              name='Out-of-Sample Returns', line=dict(color='green', width=2)),
-                    row=3, col=1
-                )
-                
-                oos_fig.update_layout(height=600, showlegend=True, 
-                                     title_text=f"Out-of-Sample Analysis: {config['name']}")
-                oos_fig.update_xaxes(showgrid=True)
-                oos_fig.update_yaxes(showgrid=True)
-                
-                st.plotly_chart(oos_fig, use_container_width=True)
-                
-                # Optimization results table
-                with st.expander("View All Optimization Results"):
-                    if not optimization_result['results'].empty:
-                        opt_df = optimization_result['results'].round(4)
-                        opt_df_sorted = opt_df.sort_values('sharpe_ratio', ascending=False)
-                        st.dataframe(opt_df_sorted, use_container_width=True)
-                    else:
-                        st.write("No optimization results available")
-        
-        # Reset optimization flag
-        st.session_state.run_optimization = False
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("**Disclaimer:** This application is for educational and research purposes only. Past performance does not guarantee future results.")
-    
-    # Auto-refresh
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    st.caption(f"Last updated: {timestamp}")
 
-def geographic_strategy_tab():
-    """Geographic strategy tab content"""
-    st.header("Geographic Sector Rotation Strategies")
-    st.markdown("Regional allocation strategies across global equity markets")
+def multiple_pair_screening():
+    """Screen multiple pairs for mean reversion"""
+    st.header("Multiple Pair Screening")
+    st.markdown("Comprehensive screening and ranking of trading pairs by mean reversion strength")
     
-    # Sidebar - Strategy Selection
-    st.sidebar.header("Geographic Strategy Configuration")
+    # Configuration
+    st.sidebar.header("Screening Configuration")
     
-    # Strategy selection
-    strategy_options = list(GEOGRAPHIC_STRATEGIES.keys())
-    
-    selected_strategy = st.sidebar.selectbox(
-        "Select Geographic Strategy:",
-        options=strategy_options,
-        format_func=lambda x: f"{GEOGRAPHIC_STRATEGIES[x]['name']} ({'/'.join(GEOGRAPHIC_STRATEGIES[x]['symbols'])})",
-        index=0,
-        key="geo_strategy_select"
+    screening_type = st.sidebar.selectbox(
+        "Screening Type:",
+        ["All Predefined Strategies", "Bond Strategies Only", "Geographic Strategies Only", "Factor Strategies Only", "Custom List"],
+        index=0
     )
     
-    # Parameter controls
-    st.sidebar.subheader("Parameters")
-    
-    window = st.sidebar.slider(
-        "Lookback Window (days):",
-        min_value=20, max_value=252, value=40, step=10,
-        help="Rolling window for calculating statistics",
-        key="geo_window"
+    period = st.sidebar.selectbox(
+        "Data Period:",
+        ["1y", "2y", "3y", "5y", "max"],
+        index=3
     )
     
-    entry_threshold = st.sidebar.slider(
-        "Entry Threshold (σ):",
-        min_value=1.0, max_value=3.0, value=3.0, step=0.25,
-        help="Z-score threshold for entering positions",
-        key="geo_entry"
-    )
+    # Build pairs list
+    pairs_list = []
     
-    exit_threshold = st.sidebar.slider(
-        "Exit Threshold (σ):",
-        min_value=0.1, max_value=1.0, value=1.0, step=0.1,
-        help="Z-score threshold for exiting positions",
-        key="geo_exit"
-    )
-    
-    # Refresh button
-    if st.sidebar.button("Refresh Geographic Data", type="primary", key="geo_refresh"):
-        st.cache_data.clear()
-        st.rerun()
-    
-    # Optimization section
-    st.sidebar.header("Parameter Optimization")
-    st.sidebar.markdown("**Optimize parameters using 2021-2024 data**")
-    
-    if st.sidebar.button("Optimize Geographic Parameters", type="secondary", key="geo_optimize"):
-        st.session_state.run_geographic_optimization = True
-    
-    # Get strategy configuration
-    config = GEOGRAPHIC_STRATEGIES[selected_strategy]
-    symbols = config['symbols']
-    
-    # Calculate strategy
-    with st.spinner("Calculating geographic strategy..."):
-        result = st.session_state.engine.calculate_strategy(
-            symbols[0], symbols[1], 
-            window, entry_threshold, exit_threshold
+    if screening_type == "All Predefined Strategies":
+        for strategy_dict in [BOND_STRATEGIES, GEOGRAPHIC_STRATEGIES, FACTOR_STRATEGIES]:
+            for config in strategy_dict.values():
+                pairs_list.append(tuple(config['symbols']))
+    elif screening_type == "Bond Strategies Only":
+        for config in BOND_STRATEGIES.values():
+            pairs_list.append(tuple(config['symbols']))
+    elif screening_type == "Geographic Strategies Only":
+        for config in GEOGRAPHIC_STRATEGIES.values():
+            pairs_list.append(tuple(config['symbols']))
+    elif screening_type == "Factor Strategies Only":
+        for config in FACTOR_STRATEGIES.values():
+            pairs_list.append(tuple(config['symbols']))
+    else:  # Custom List
+        st.sidebar.markdown("**Add Custom Pairs:**")
+        custom_pairs = st.sidebar.text_area(
+            "Enter pairs (one per line, format: SYMBOL1,SYMBOL2):",
+            value="SPY,QQQ\nHYG,TLT\nVUG,VYM"
         )
+        pairs_list = []
+        for line in custom_pairs.strip().split('\n'):
+            if ',' in line:
+                symbols = [s.strip().upper() for s in line.split(',')]
+                if len(symbols) == 2:
+                    pairs_list.append(tuple(symbols))
     
-    if result.get('error'):
-        st.error(f"Error: {result['error']}")
-        return
+    # Display pairs to be screened
+    st.write(f"**Pairs to screen:** {len(pairs_list)}")
+    with st.expander("View pairs list"):
+        for i, (s1, s2) in enumerate(pairs_list, 1):
+            st.write(f"{i}. {s1}/{s2}")
     
-    # Display strategy info
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader(f"{config['name']}")
-        st.write(config['description'])
-        st.write(f"**ETFs:** {' vs '.join(symbols)}")
-    
-    with col2:
-        # Current signal badge
-        current_signals = result.get('current_signals', {})
-        signal_val = current_signals.get('signal', 0)
-        zscore_val = current_signals.get('zscore', 0)
+    # Run screening
+    if st.sidebar.button("Run Screening Analysis", type="primary"):
+        if len(pairs_list) == 0:
+            st.error("No pairs to screen. Please select or add pairs.")
+            return
         
-        if signal_val > 0:
-            st.success(f"LONG {symbols[0]}")
-            st.write(f"**Action:** Buy {symbols[0]}, Sell {symbols[1]}")
-        elif signal_val < 0:
-            st.error(f"SHORT {symbols[0]}")
-            st.write(f"**Action:** Sell {symbols[0]}, Buy {symbols[1]}")
-        else:
-            st.warning("NEUTRAL")
-            st.write("**Action:** No position")
+        with st.spinner(f"Screening {len(pairs_list)} pairs..."):
+            screening_results = st.session_state.tester.screen_multiple_pairs(pairs_list, period)
         
-        st.write(f"**Current Z-Score:** {zscore_val:+.2f}")
+        # Display results
+        display_screening_results(screening_results)
+
+def display_screening_results(results):
+    """Display multiple pair screening results"""
+    summary_df = results['summary']
+    detailed_results = results['detailed_results']
+    best_pairs = results['best_pairs']
     
-    # Performance metrics
-    metrics = result.get('metrics', {})
+    # Summary statistics
+    st.subheader("Screening Summary")
     
-    # Metrics row
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric(
-            "Total Return",
-            f"{metrics.get('Total Return', 0):.1%}",
-            help="Total strategy return over the period"
-        )
+        st.metric("Total Pairs Analyzed", len(summary_df))
     
     with col2:
-        st.metric(
-            "Sharpe Ratio",
-            f"{metrics.get('Sharpe Ratio', 0):.2f}",
-            help="Risk-adjusted return measure"
-        )
+        strong_pairs = len(summary_df[summary_df['Mean Reversion Score'] >= 0.7])
+        st.metric("Strong Mean Reversion", strong_pairs)
     
     with col3:
-        st.metric(
-            "Max Drawdown",
-            f"{metrics.get('Max Drawdown', 0):.1%}",
-            help="Maximum peak-to-trough decline"
-        )
+        moderate_pairs = len(summary_df[summary_df['Mean Reversion Score'].between(0.5, 0.7)])
+        st.metric("Moderate Mean Reversion", moderate_pairs)
     
     with col4:
-        st.metric(
-            "Win Rate",
-            f"{metrics.get('Win Rate', 0):.1%}",
-            help="Percentage of profitable trades"
-        )
+        avg_score = summary_df['Mean Reversion Score'].mean()
+        st.metric("Average Score", f"{avg_score:.3f}")
     
-    # Charts
-    st.subheader("Geographic Strategy Analysis")
+    # Results table
+    st.subheader("Screening Results")
     
-    # Create 4-panel chart
-    fig = make_subplots(
-        rows=4, cols=1,
-        subplot_titles=[
-            f'Price Evolution: {" vs ".join(symbols)}',
-            'Price Ratio',
-            'Z-Score with Entry/Exit Thresholds',
-            'Cumulative Strategy Returns'
-        ],
-        vertical_spacing=0.08
-    )
-    
-    # Get data
-    ratio = result['ratio']
-    zscore = result['zscore']
-    cumulative = result['cumulative_returns']
-    price1 = result['price1']
-    price2 = result['price2']
-    
-    # 1. Price Evolution
-    fig.add_trace(
-        go.Scatter(x=price1.index, y=price1.values, 
-                  name=symbols[0], line=dict(color='blue')),
-        row=1, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=price2.index, y=price2.values, 
-                  name=symbols[1], line=dict(color='red')),
-        row=1, col=1
-    )
-    
-    # 2. Price Ratio
-    fig.add_trace(
-        go.Scatter(x=ratio.index, y=ratio.values, 
-                  name='Price Ratio', line=dict(color='purple')),
-        row=2, col=1
-    )
-    
-    # 3. Z-Score with thresholds
-    fig.add_trace(
-        go.Scatter(x=zscore.index, y=zscore.values, 
-                  name='Z-Score', line=dict(color='black')),
-        row=3, col=1
-    )
-    
-    fig.add_hline(y=entry_threshold, line_dash="dash", line_color="red", row=3, col=1)
-    fig.add_hline(y=-entry_threshold, line_dash="dash", line_color="red", row=3, col=1)
-    fig.add_hline(y=exit_threshold, line_dash="dot", line_color="orange", row=3, col=1)
-    fig.add_hline(y=-exit_threshold, line_dash="dot", line_color="orange", row=3, col=1)
-    fig.add_hline(y=0, line_dash="solid", line_color="gray", row=3, col=1)
-    
-    # 4. Cumulative Returns
-    fig.add_trace(
-        go.Scatter(x=cumulative.index, y=cumulative.values, 
-                  name='Strategy Returns', line=dict(color='green', width=2)),
-        row=4, col=1
-    )
-    
-    fig.update_layout(height=800, showlegend=True, title_text=f"Geographic Strategy Analysis: {config['name']}")
-    fig.update_xaxes(showgrid=True)
-    fig.update_yaxes(showgrid=True)
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Performance Table
-    st.subheader("Detailed Performance Metrics")
-    
-    performance_data = {
-        "Metric": [
-            "Total Return", "Annualized Return", "Annualized Volatility",
-            "Sharpe Ratio", "Sortino Ratio", "Max Drawdown", 
-            "Win Rate", "Total Trades"
-        ],
-        "Value": [
-            f"{metrics.get('Total Return', 0):.2%}",
-            f"{metrics.get('Annualized Return', 0):.2%}",
-            f"{metrics.get('Annualized Volatility', 0):.2%}",
-            f"{metrics.get('Sharpe Ratio', 0):.3f}",
-            f"{metrics.get('Sortino Ratio', 0):.3f}",
-            f"{metrics.get('Max Drawdown', 0):.2%}",
-            f"{metrics.get('Win Rate', 0):.1%}",
-            f"{metrics.get('Total Trades', 0):.0f}"
-        ]
-    }
-    
-    performance_df = pd.DataFrame(performance_data)
-    st.dataframe(performance_df, use_container_width=True, hide_index=True)
-    
-    # Strategy Parameters
-    with st.expander("Current Strategy Parameters"):
-        params = result.get('parameters', {})
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.write(f"**Lookback Window:** {params.get('window', 0)} days")
-        with col2:
-            st.write(f"**Entry Threshold:** ±{params.get('entry_threshold', 0)} σ")
-        with col3:
-            st.write(f"**Exit Threshold:** ±{params.get('exit_threshold', 0)} σ")
-    
-    # Parameter Optimization Section
-    if st.session_state.get('run_geographic_optimization', False):
-        st.header("Geographic Parameter Optimization & Out-of-Sample Testing")
-        
-        with st.spinner("Running parameter optimization on 2021-2024 data..."):
-            optimization_result = st.session_state.engine.optimize_parameters(
-                symbols[0], symbols[1]
-            )
-        
-        if optimization_result.get('error'):
-            st.error(f"Optimization failed: {optimization_result['error']}")
-        elif optimization_result.get('success'):
-            best_params = optimization_result['best_params']
-            best_sharpe = optimization_result['best_sharpe']
-            best_in_sample_metrics = optimization_result['best_in_sample_metrics']
-            
-            st.success(f"Optimization completed! Best Sharpe ratio: {best_sharpe:.3f}")
-            
-            # Display best parameters
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Best Window", f"{best_params['window']} days")
-            with col2:
-                st.metric("Best Entry Threshold", f"±{best_params['entry_threshold']} σ")
-            with col3:
-                st.metric("Best Exit Threshold", f"±{best_params['exit_threshold']} σ")
-            
-            # Calculate out-of-sample performance
-            with st.spinner("Calculating out-of-sample performance on 2025+ data..."):
-                oos_result = st.session_state.engine.calculate_out_of_sample(
-                    symbols[0], symbols[1], best_params
-                )
-            
-            if oos_result.get('error'):
-                st.error(f"Out-of-sample calculation failed: {oos_result['error']}")
-            elif oos_result.get('success'):
-                oos_metrics = oos_result['metrics']
-                
-                # Performance comparison table
-                st.subheader("In-Sample vs Out-of-Sample Performance")
-                
-                comparison_data = {
-                    "Metric": [
-                        "Total Return", "Annualized Return", "Sharpe Ratio", 
-                        "Max Drawdown", "Win Rate", "Total Trades"
-                    ],
-                    "In-Sample (2021-2024)": [
-                        f"{best_in_sample_metrics.get('Total Return', 0):.2%}",
-                        f"{best_in_sample_metrics.get('Annualized Return', 0):.2%}",
-                        f"{best_in_sample_metrics.get('Sharpe Ratio', 0):.3f}",
-                        f"{best_in_sample_metrics.get('Max Drawdown', 0):.2%}",
-                        f"{best_in_sample_metrics.get('Win Rate', 0):.1%}",
-                        f"{best_in_sample_metrics.get('Total Trades', 0):.0f}"
-                    ],
-                    "Out-of-Sample (2025+)": [
-                        f"{oos_metrics.get('Total Return', 0):.2%}",
-                        f"{oos_metrics.get('Annualized Return', 0):.2%}",
-                        f"{oos_metrics.get('Sharpe Ratio', 0):.3f}",
-                        f"{oos_metrics.get('Max Drawdown', 0):.2%}",
-                        f"{oos_metrics.get('Win Rate', 0):.1%}",
-                        f"{oos_metrics.get('Total Trades', 0):.0f}"
-                    ]
-                }
-                
-                comparison_df = pd.DataFrame(comparison_data)
-                st.dataframe(comparison_df, use_container_width=True, hide_index=True)
-                
-                # Out-of-sample chart
-                st.subheader("Out-of-Sample Strategy Performance (2025+)")
-                
-                oos_ratio = oos_result['ratio']
-                oos_zscore = oos_result['zscore']
-                oos_cumulative = oos_result['cumulative_returns']
-                
-                oos_fig = make_subplots(
-                    rows=3, cols=1,
-                    subplot_titles=[
-                        'Price Ratio (Out-of-Sample)',
-                        'Z-Score with Optimized Thresholds',
-                        'Cumulative Returns (Out-of-Sample)'
-                    ],
-                    vertical_spacing=0.1
-                )
-                
-                # Price ratio
-                oos_fig.add_trace(
-                    go.Scatter(x=oos_ratio.index, y=oos_ratio.values, 
-                              name='Price Ratio', line=dict(color='blue')),
-                    row=1, col=1
-                )
-                
-                # Z-score with thresholds
-                oos_fig.add_trace(
-                    go.Scatter(x=oos_zscore.index, y=oos_zscore.values, 
-                              name='Z-Score', line=dict(color='black')),
-                    row=2, col=1
-                )
-                
-                oos_fig.add_hline(y=best_params['entry_threshold'], line_dash="dash", 
-                                 line_color="red", row=2, col=1)
-                oos_fig.add_hline(y=-best_params['entry_threshold'], line_dash="dash", 
-                                 line_color="red", row=2, col=1)
-                oos_fig.add_hline(y=best_params['exit_threshold'], line_dash="dot", 
-                                 line_color="orange", row=2, col=1)
-                oos_fig.add_hline(y=-best_params['exit_threshold'], line_dash="dot", 
-                                 line_color="orange", row=2, col=1)
-                oos_fig.add_hline(y=0, line_dash="solid", line_color="gray", row=2, col=1)
-                
-                # Cumulative returns
-                oos_fig.add_trace(
-                    go.Scatter(x=oos_cumulative.index, y=oos_cumulative.values, 
-                              name='Out-of-Sample Returns', line=dict(color='green', width=2)),
-                    row=3, col=1
-                )
-                
-                oos_fig.update_layout(height=600, showlegend=True, 
-                                     title_text=f"Out-of-Sample Analysis: {config['name']}")
-                oos_fig.update_xaxes(showgrid=True)
-                oos_fig.update_yaxes(showgrid=True)
-                
-                st.plotly_chart(oos_fig, use_container_width=True)
-                
-                # Optimization results table
-                with st.expander("View All Optimization Results"):
-                    if not optimization_result['results'].empty:
-                        opt_df = optimization_result['results'].round(4)
-                        opt_df_sorted = opt_df.sort_values('sharpe_ratio', ascending=False)
-                        st.dataframe(opt_df_sorted, use_container_width=True)
-                    else:
-                        st.write("No optimization results available")
-        
-        # Reset optimization flag
-        st.session_state.run_geographic_optimization = False
-
-def factor_strategy_tab():
-    """Factor strategy tab content"""
-    st.header("Factor ETF Rotation Strategies")
-    st.markdown("Factor-based mean reversion strategies across different investment factors")
-    
-    # Sidebar - Strategy Selection
-    st.sidebar.header("Factor Strategy Configuration")
-    
-    # Strategy selection
-    strategy_options = list(FACTOR_STRATEGIES.keys())
-    
-    selected_strategy = st.sidebar.selectbox(
-        "Select Factor Strategy:",
-        options=strategy_options,
-        format_func=lambda x: f"{FACTOR_STRATEGIES[x]['name']} ({'/'.join(FACTOR_STRATEGIES[x]['symbols'])})",
-        index=0,
-        key="factor_strategy_select"
-    )
-    
-    # Parameter controls
-    st.sidebar.subheader("Parameters")
-    
-    window = st.sidebar.slider(
-        "Lookback Window (days):",
-        min_value=20, max_value=252, value=50, step=10,
-        help="Rolling window for calculating statistics",
-        key="factor_window"
-    )
-    
-    entry_threshold = st.sidebar.slider(
-        "Entry Threshold (σ):",
-        min_value=1.0, max_value=3.0, value=2.5, step=0.25,
-        help="Z-score threshold for entering positions",
-        key="factor_entry"
-    )
-    
-    exit_threshold = st.sidebar.slider(
-        "Exit Threshold (σ):",
-        min_value=0.1, max_value=1.0, value=0.75, step=0.1,
-        help="Z-score threshold for exiting positions",
-        key="factor_exit"
-    )
-    
-    # Refresh button
-    if st.sidebar.button("Refresh Factor Data", type="primary", key="factor_refresh"):
-        st.cache_data.clear()
-        st.rerun()
-    
-    # Optimization section
-    st.sidebar.header("Parameter Optimization")
-    st.sidebar.markdown("**Optimize parameters using 2021-2024 data**")
-    
-    if st.sidebar.button("Optimize Factor Parameters", type="secondary", key="factor_optimize"):
-        st.session_state.run_factor_optimization = True
-    
-    # Get strategy configuration
-    config = FACTOR_STRATEGIES[selected_strategy]
-    symbols = config['symbols']
-    
-    # Calculate strategy
-    with st.spinner("Calculating factor strategy..."):
-        result = st.session_state.engine.calculate_strategy(
-            symbols[0], symbols[1], 
-            window, entry_threshold, exit_threshold
-        )
-    
-    if result.get('error'):
-        st.error(f"Error: {result['error']}")
-        return
-    
-    # Display strategy info
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader(f"{config['name']}")
-        st.write(config['description'])
-        st.write(f"**ETFs:** {' vs '.join(symbols)}")
-    
-    with col2:
-        # Current signal badge
-        current_signals = result.get('current_signals', {})
-        signal_val = current_signals.get('signal', 0)
-        zscore_val = current_signals.get('zscore', 0)
-        
-        if signal_val > 0:
-            st.success(f"LONG {symbols[0]}")
-            st.write(f"**Action:** Buy {symbols[0]}, Sell {symbols[1]}")
-        elif signal_val < 0:
-            st.error(f"SHORT {symbols[0]}")
-            st.write(f"**Action:** Sell {symbols[0]}, Buy {symbols[1]}")
+    # Color code the dataframe
+    def color_score(val):
+        if val >= 0.7:
+            return 'background-color: #d4edda'  # Green
+        elif val >= 0.5:
+            return 'background-color: #fff3cd'  # Yellow
+        elif val >= 0.3:
+            return 'background-color: #f8d7da'  # Red
         else:
-            st.warning("NEUTRAL")
-            st.write("**Action:** No position")
+            return 'background-color: #f1f1f1'  # Gray
+    
+    styled_df = summary_df.style.applymap(color_score, subset=['Mean Reversion Score'])
+    st.dataframe(styled_df, use_container_width=True)
+    
+    # Best pairs section
+    if not best_pairs.empty:
+        st.subheader("Recommended Trading Pairs")
+        st.markdown("Pairs with mean reversion score ≥ 0.5")
         
-        st.write(f"**Current Z-Score:** {zscore_val:+.2f}")
+        for _, row in best_pairs.iterrows():
+            with st.expander(f"{row['Pair']} (Score: {row['Mean Reversion Score']:.3f})"):
+                # Find detailed results for this pair
+                pair_detail = None
+                for detail in detailed_results:
+                    if detail['pair_name'] == row['Pair']:
+                        pair_detail = detail
+                        break
+                
+                if pair_detail and 'error' not in pair_detail:
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.write("**Statistical Tests:**")
+                        st.write(f"• Stationarity: {row['Stationarity']}")
+                        st.write(f"• Cointegration: {row['Cointegration']}")
+                        st.write(f"• Half-Life: {row['Half-Life (days)']:.0f} days")
+                    
+                    with col2:
+                        st.write("**Risk Metrics:**")
+                        st.write(f"• Hurst Exponent: {row['Hurst Exponent']:.3f}")
+                        regime = pair_detail.get('regime_detection', {})
+                        if 'num_regime_changes' in regime:
+                            st.write(f"• Regime Changes: {regime['num_regime_changes']}")
+                        st.write(f"• Data Points: {row['Data Points']}")
+                    
+                    with col3:
+                        st.write("**Implementation:**")
+                        st.write(f"• Recommendation: {row['Recommendation']}")
+                        
+                        # Quick implementation notes
+                        if row['Half-Life (days)'] < 30:
+                            st.write("• Strategy: Short-term mean reversion")
+                        elif row['Half-Life (days)'] < 90:
+                            st.write("• Strategy: Medium-term rotation")
+                        else:
+                            st.write("• Strategy: Long-term allocation")
+                
+                else:
+                    st.error(f"Detailed analysis not available: {row['Recommendation']}")
     
-    # Performance metrics
-    metrics = result.get('metrics', {})
+    # Download results
+    csv = summary_df.to_csv(index=False)
+    st.download_button(
+        label="Download Screening Results",
+        data=csv,
+        file_name=f"mean_reversion_screening_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+        mime="text/csv"
+    )
+
+def strategy_implementation():
+    """Strategy implementation with validated pairs"""
+    st.header("Strategy Implementation")
+    st.markdown("Implement mean reversion strategies using statistically validated pairs")
     
-    # Metrics row
-    col1, col2, col3, col4 = st.columns(4)
+    st.info("**Coming Soon:** Advanced strategy implementation with backtesting, parameter optimization, and live trading signals based on validated mean reversion relationships.")
+    
+    # For now, show a preview of what's coming
+    st.subheader("Planned Features")
+    
+    col1, col2 = st.columns(2)
     
     with col1:
-        st.metric(
-            "Total Return",
-            f"{metrics.get('Total Return', 0):.1%}",
-            help="Total strategy return over the period"
-        )
+        st.markdown("""
+        **Statistical Strategy Builder:**
+        - Parameter optimization based on half-life
+        - Dynamic threshold adjustment
+        - Regime-aware position sizing
+        - Out-of-sample validation
+        """)
     
     with col2:
-        st.metric(
-            "Sharpe Ratio",
-            f"{metrics.get('Sharpe Ratio', 0):.2f}",
-            help="Risk-adjusted return measure"
-        )
+        st.markdown("""
+        **Advanced Analytics:**
+        - Real-time regime detection
+        - Cointegration stability monitoring
+        - Performance attribution
+        - Risk management alerts
+        """)
+
+def quick_overview():
+    """Quick overview of strategies"""
+    st.header("Quick Strategy Overview")
+    st.markdown("Overview of all available strategy categories")
     
-    with col3:
-        st.metric(
-            "Max Drawdown",
-            f"{metrics.get('Max Drawdown', 0):.1%}",
-            help="Maximum peak-to-trough decline"
-        )
+    # Strategy category tabs
+    tab1, tab2, tab3 = st.tabs(["Bond Strategies", "Geographic Strategies", "Factor Strategies"])
     
-    with col4:
-        st.metric(
-            "Win Rate",
-            f"{metrics.get('Win Rate', 0):.1%}",
-            help="Percentage of profitable trades"
-        )
+    with tab1:
+        st.subheader("Bond Strategies")
+        for key, config in BOND_STRATEGIES.items():
+            st.write(f"**{config['name']}:** {config['description']}")
     
-    # Charts
-    st.subheader("Factor Strategy Analysis")
+    with tab2:
+        st.subheader("Geographic Strategies")
+        for key, config in GEOGRAPHIC_STRATEGIES.items():
+            st.write(f"**{config['name']}:** {config['description']}")
     
-    # Create 4-panel chart
-    fig = make_subplots(
-        rows=4, cols=1,
-        subplot_titles=[
-            f'Price Evolution: {" vs ".join(symbols)}',
-            'Price Ratio',
-            'Z-Score with Entry/Exit Thresholds',
-            'Cumulative Strategy Returns'
+    with tab3:
+        st.subheader("Factor Strategies")
+        for key, config in FACTOR_STRATEGIES.items():
+            st.write(f"**{config['name']}:** {config['description']}")
+
+def scoring_methodology():
+    """Detailed explanation of the mean reversion scoring methodology"""
+    st.header("Mean Reversion Scoring Methodology")
+    st.markdown("### Understanding how pairs are evaluated and ranked")
+    
+    # Overview
+    st.subheader("Overview")
+    st.markdown("""
+    The **Mean Reversion Score** is a composite metric ranging from 0.0 to 1.0 that quantifies 
+    the strength of mean-reverting behavior in a trading pair. Higher scores indicate stronger 
+    statistical evidence for mean reversion and better trading opportunities.
+    """)
+    
+    # Score breakdown
+    st.subheader("Score Components (Weighted)")
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.markdown("""
+        **Component Weights:**
+        - **Stationarity: 40%**
+        - **Cointegration: 30%**  
+        - **Half-Life: 20%**
+        - **Hurst Exponent: 10%**
+        """)
+    
+    with col2:
+        # Create a visual breakdown
+        labels = ['Stationarity (40%)', 'Cointegration (30%)', 'Half-Life (20%)', 'Hurst Exponent (10%)']
+        values = [0.4, 0.3, 0.2, 0.1]
+        colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4']
+        
+        fig = go.Figure(data=[go.Pie(labels=labels, values=values, 
+                                   marker_colors=colors, hole=0.4)])
+        fig.update_layout(title="Score Component Weights", height=300)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Detailed component explanations
+    st.subheader("Component Details")
+    
+    # Stationarity section
+    with st.expander("Stationarity Tests (40% Weight) - Most Important"):
+        st.markdown("""
+        **What it measures:** Whether the price ratio returns to its mean over time
+        
+        **Tests performed:**
+        - **ADF (Augmented Dickey-Fuller):** Tests null hypothesis of non-stationarity
+        - **KPSS:** Tests null hypothesis of stationarity
+        
+        **Scoring logic:**
+        - **0.4 points:** Both tests confirm stationarity (High confidence)
+        - **0.2 points:** Only one test confirms stationarity (Medium confidence)  
+        - **0.0 points:** Both tests indicate non-stationarity
+        
+        **Why it's weighted highest:** Stationarity is the foundation of mean reversion. 
+        Without it, the ratio will trend indefinitely rather than revert.
+        
+        **Interpretation:**
+        - **Stationary:** Ratio tends to revert to historical mean
+        - **Non-stationary:** Ratio follows random walk or trend
+        """)
+    
+    # Cointegration section  
+    with st.expander("Cointegration Analysis (30% Weight) - Critical"):
+        st.markdown("""
+        **What it measures:** Long-term equilibrium relationship between price series
+        
+        **Test performed:**
+        - **Engle-Granger Test:** Tests for cointegrating relationship in both directions
+        
+        **Scoring logic:**
+        - **0.3 points:** Pairs are cointegrated (p-value < 0.05)
+        - **0.0 points:** No cointegration detected
+        
+        **Why it's important:** Cointegration ensures that even if prices drift apart 
+        temporarily, they will be pulled back together by economic forces.
+        
+        **Practical meaning:**
+        - **Cointegrated:** Prices move together long-term, deviations are temporary
+        - **Not cointegrated:** No long-term relationship, pairs may drift apart permanently
+        """)
+    
+    # Half-life section
+    with st.expander("Half-Life Analysis (20% Weight) - Timing"):
+        st.markdown("""
+        **What it measures:** How quickly mean reversion occurs
+        
+        **Calculation:** AR(1) model: Δy = α + βy(t-1) + ε
+        - Half-life = -ln(2) / ln(1 + β)
+        
+        **Scoring logic:**
+        - **0.2 points:** Significant mean reversion (β < 0, p-value < 0.05) AND half-life < 100 days
+        - **0.1 points:** Significant mean reversion but slower (half-life > 100 days)
+        - **0.0 points:** No significant mean reversion detected
+        
+        **Trading implications:**
+        - **< 30 days:** High-frequency trading opportunity
+        - **30-90 days:** Medium-term rotation strategy  
+        - **> 90 days:** Long-term allocation strategy
+        - **∞ (infinite):** No mean reversion - avoid trading
+        """)
+    
+    # Hurst exponent section
+    with st.expander("Hurst Exponent (10% Weight) - Behavioral Confirmation"):
+        st.markdown("""
+        **What it measures:** Autocorrelation structure and trending behavior
+        
+        **Calculation:** Rescaled range analysis over multiple time lags
+        
+        **Interpretation:**
+        - **H < 0.5:** Mean-reverting behavior (anti-persistent)
+        - **H = 0.5:** Random walk (no predictable pattern)
+        - **H > 0.5:** Trending behavior (persistent)
+        
+        **Scoring logic:**
+        - **0.1 points:** H < 0.5 (mean-reverting interpretation)
+        - **0.0 points:** H ≥ 0.5 (random walk or trending)
+        
+        **Why lowest weight:** Confirms other tests but less reliable for trading signals
+        """)
+    
+    # Score interpretation
+    st.subheader("Score Interpretation & Trading Recommendations")
+    
+    # Create score ranges table
+    score_data = {
+        "Score Range": ["0.90 - 1.00", "0.70 - 0.89", "0.50 - 0.69", "0.30 - 0.49", "0.00 - 0.29"],
+        "Classification": [
+            "Exceptional", 
+            "Strong Mean Reversion", 
+            "Moderate Mean Reversion", 
+            "Weak Mean Reversion", 
+            "No Mean Reversion"
         ],
-        vertical_spacing=0.08
-    )
-    
-    # Get data
-    ratio = result['ratio']
-    zscore = result['zscore']
-    cumulative = result['cumulative_returns']
-    price1 = result['price1']
-    price2 = result['price2']
-    
-    # 1. Price Evolution
-    fig.add_trace(
-        go.Scatter(x=price1.index, y=price1.values, 
-                  name=symbols[0], line=dict(color='blue')),
-        row=1, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=price2.index, y=price2.values, 
-                  name=symbols[1], line=dict(color='red')),
-        row=1, col=1
-    )
-    
-    # 2. Price Ratio
-    fig.add_trace(
-        go.Scatter(x=ratio.index, y=ratio.values, 
-                  name='Price Ratio', line=dict(color='purple')),
-        row=2, col=1
-    )
-    
-    # 3. Z-Score with thresholds
-    fig.add_trace(
-        go.Scatter(x=zscore.index, y=zscore.values, 
-                  name='Z-Score', line=dict(color='black')),
-        row=3, col=1
-    )
-    
-    fig.add_hline(y=entry_threshold, line_dash="dash", line_color="red", row=3, col=1)
-    fig.add_hline(y=-entry_threshold, line_dash="dash", line_color="red", row=3, col=1)
-    fig.add_hline(y=exit_threshold, line_dash="dot", line_color="orange", row=3, col=1)
-    fig.add_hline(y=-exit_threshold, line_dash="dot", line_color="orange", row=3, col=1)
-    fig.add_hline(y=0, line_dash="solid", line_color="gray", row=3, col=1)
-    
-    # 4. Cumulative Returns
-    fig.add_trace(
-        go.Scatter(x=cumulative.index, y=cumulative.values, 
-                  name='Strategy Returns', line=dict(color='green', width=2)),
-        row=4, col=1
-    )
-    
-    fig.update_layout(height=800, showlegend=True, title_text=f"Factor Strategy Analysis: {config['name']}")
-    fig.update_xaxes(showgrid=True)
-    fig.update_yaxes(showgrid=True)
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Performance Table
-    st.subheader("Detailed Performance Metrics")
-    
-    performance_data = {
-        "Metric": [
-            "Total Return", "Annualized Return", "Annualized Volatility",
-            "Sharpe Ratio", "Sortino Ratio", "Max Drawdown", 
-            "Win Rate", "Total Trades"
+        "Trading Recommendation": [
+            "Highest priority - Deploy significant capital",
+            "Highly tradeable - Core strategy pairs", 
+            "Tradeable with caution - Monitor closely",
+            "Not recommended - High risk",
+            "Avoid - No statistical edge"
         ],
-        "Value": [
-            f"{metrics.get('Total Return', 0):.2%}",
-            f"{metrics.get('Annualized Return', 0):.2%}",
-            f"{metrics.get('Annualized Volatility', 0):.2%}",
-            f"{metrics.get('Sharpe Ratio', 0):.3f}",
-            f"{metrics.get('Sortino Ratio', 0):.3f}",
-            f"{metrics.get('Max Drawdown', 0):.2%}",
-            f"{metrics.get('Win Rate', 0):.1%}",
-            f"{metrics.get('Total Trades', 0):.0f}"
+        "Expected Characteristics": [
+            "All tests pass, fast reversion, stable relationship",
+            "Most tests pass, good reversion speed", 
+            "Mixed test results, moderate reversion",
+            "Few tests pass, slow/unreliable reversion",
+            "Tests fail, no reversion evidence"
         ]
     }
     
-    performance_df = pd.DataFrame(performance_data)
-    st.dataframe(performance_df, use_container_width=True, hide_index=True)
+    score_df = pd.DataFrame(score_data)
+    st.dataframe(score_df, use_container_width=True, hide_index=True)
     
-    # Strategy Parameters
-    with st.expander("Current Strategy Parameters"):
-        params = result.get('parameters', {})
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.write(f"**Lookback Window:** {params.get('window', 0)} days")
-        with col2:
-            st.write(f"**Entry Threshold:** ±{params.get('entry_threshold', 0)} σ")
-        with col3:
-            st.write(f"**Exit Threshold:** ±{params.get('exit_threshold', 0)} σ")
+    # Statistical significance
+    st.subheader("Statistical Significance Thresholds")
     
-    # Parameter Optimization Section
-    if st.session_state.get('run_factor_optimization', False):
-        st.header("Factor Parameter Optimization & Out-of-Sample Testing")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        **P-value Thresholds:**
+        - 0.05 (5%): Standard significance level
+        - 0.01 (1%): High confidence level
         
-        with st.spinner("Running parameter optimization on 2021-2024 data..."):
-            optimization_result = st.session_state.engine.optimize_parameters(
-                symbols[0], symbols[1]
-            )
-        
-        if optimization_result.get('error'):
-            st.error(f"Optimization failed: {optimization_result['error']}")
-        elif optimization_result.get('success'):
-            best_params = optimization_result['best_params']
-            best_sharpe = optimization_result['best_sharpe']
-            best_in_sample_metrics = optimization_result['best_in_sample_metrics']
-            
-            st.success(f"Optimization completed! Best Sharpe ratio: {best_sharpe:.3f}")
-            
-            # Display best parameters
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Best Window", f"{best_params['window']} days")
-            with col2:
-                st.metric("Best Entry Threshold", f"±{best_params['entry_threshold']} σ")
-            with col3:
-                st.metric("Best Exit Threshold", f"±{best_params['exit_threshold']} σ")
-            
-            # Calculate out-of-sample performance
-            with st.spinner("Calculating out-of-sample performance on 2025+ data..."):
-                oos_result = st.session_state.engine.calculate_out_of_sample(
-                    symbols[0], symbols[1], best_params
-                )
-            
-            if oos_result.get('error'):
-                st.error(f"Out-of-sample calculation failed: {oos_result['error']}")
-            elif oos_result.get('success'):
-                oos_metrics = oos_result['metrics']
-                
-                # Performance comparison table
-                st.subheader("In-Sample vs Out-of-Sample Performance")
-                
-                comparison_data = {
-                    "Metric": [
-                        "Total Return", "Annualized Return", "Sharpe Ratio", 
-                        "Max Drawdown", "Win Rate", "Total Trades"
-                    ],
-                    "In-Sample (2021-2024)": [
-                        f"{best_in_sample_metrics.get('Total Return', 0):.2%}",
-                        f"{best_in_sample_metrics.get('Annualized Return', 0):.2%}",
-                        f"{best_in_sample_metrics.get('Sharpe Ratio', 0):.3f}",
-                        f"{best_in_sample_metrics.get('Max Drawdown', 0):.2%}",
-                        f"{best_in_sample_metrics.get('Win Rate', 0):.1%}",
-                        f"{best_in_sample_metrics.get('Total Trades', 0):.0f}"
-                    ],
-                    "Out-of-Sample (2025+)": [
-                        f"{oos_metrics.get('Total Return', 0):.2%}",
-                        f"{oos_metrics.get('Annualized Return', 0):.2%}",
-                        f"{oos_metrics.get('Sharpe Ratio', 0):.3f}",
-                        f"{oos_metrics.get('Max Drawdown', 0):.2%}",
-                        f"{oos_metrics.get('Win Rate', 0):.1%}",
-                        f"{oos_metrics.get('Total Trades', 0):.0f}"
-                    ]
-                }
-                
-                comparison_df = pd.DataFrame(comparison_data)
-                st.dataframe(comparison_df, use_container_width=True, hide_index=True)
-                
-                # Out-of-sample chart
-                st.subheader("Out-of-Sample Strategy Performance (2025+)")
-                
-                oos_ratio = oos_result['ratio']
-                oos_zscore = oos_result['zscore']
-                oos_cumulative = oos_result['cumulative_returns']
-                
-                oos_fig = make_subplots(
-                    rows=3, cols=1,
-                    subplot_titles=[
-                        'Price Ratio (Out-of-Sample)',
-                        'Z-Score with Optimized Thresholds',
-                        'Cumulative Returns (Out-of-Sample)'
-                    ],
-                    vertical_spacing=0.1
-                )
-                
-                # Price ratio
-                oos_fig.add_trace(
-                    go.Scatter(x=oos_ratio.index, y=oos_ratio.values, 
-                              name='Price Ratio', line=dict(color='blue')),
-                    row=1, col=1
-                )
-                
-                # Z-score with thresholds
-                oos_fig.add_trace(
-                    go.Scatter(x=oos_zscore.index, y=oos_zscore.values, 
-                              name='Z-Score', line=dict(color='black')),
-                    row=2, col=1
-                )
-                
-                oos_fig.add_hline(y=best_params['entry_threshold'], line_dash="dash", 
-                                 line_color="red", row=2, col=1)
-                oos_fig.add_hline(y=-best_params['entry_threshold'], line_dash="dash", 
-                                 line_color="red", row=2, col=1)
-                oos_fig.add_hline(y=best_params['exit_threshold'], line_dash="dot", 
-                                 line_color="orange", row=2, col=1)
-                oos_fig.add_hline(y=-best_params['exit_threshold'], line_dash="dot", 
-                                 line_color="orange", row=2, col=1)
-                oos_fig.add_hline(y=0, line_dash="solid", line_color="gray", row=2, col=1)
-                
-                # Cumulative returns
-                oos_fig.add_trace(
-                    go.Scatter(x=oos_cumulative.index, y=oos_cumulative.values, 
-                              name='Out-of-Sample Returns', line=dict(color='green', width=2)),
-                    row=3, col=1
-                )
-                
-                oos_fig.update_layout(height=600, showlegend=True, 
-                                     title_text=f"Out-of-Sample Analysis: {config['name']}")
-                oos_fig.update_xaxes(showgrid=True)
-                oos_fig.update_yaxes(showgrid=True)
-                
-                st.plotly_chart(oos_fig, use_container_width=True)
-                
-                # Optimization results table
-                with st.expander("View All Optimization Results"):
-                    if not optimization_result['results'].empty:
-                        opt_df = optimization_result['results'].round(4)
-                        opt_df_sorted = opt_df.sort_values('sharpe_ratio', ascending=False)
-                        st.dataframe(opt_df_sorted, use_container_width=True)
-                    else:
-                        st.write("No optimization results available")
-        
-        # Reset optimization flag
-        st.session_state.run_factor_optimization = False
+        **Critical Values:**
+        - ADF: More negative = more stationary
+        - KPSS: Less than critical = stationary
+        """)
+    
+    with col2:
+        st.markdown("""
+        **Confidence Levels:**
+        - **High:** Both stationarity tests agree
+        - **Medium:** Tests disagree, use caution  
+        - **Low:** Neither test supports stationarity
+        """)
+    
+    # Best practices
+    st.subheader("Best Practices")
+    
+    st.markdown("""
+    **For High-Quality Strategies:**
+    1. **Focus on scores ≥ 0.70** for core trading strategies
+    2. **Verify recent stability** using rolling analysis
+    3. **Monitor regime changes** that might break relationships
+    4. **Use half-life for position sizing** and holding periods
+    5. **Combine with fundamental analysis** for context
+    
+    **Risk Management:**
+    - Lower scores = smaller position sizes
+    - Monitor cointegration stability over time  
+    - Set stop-losses based on historical deviation ranges
+    - Diversify across multiple high-scoring pairs
+    """)
+    
+    # Footer note
+    st.info("""
+    **Remember:** Statistical tests are based on historical data and don't guarantee future performance. 
+    Market regimes can change, breaking previously strong mean-reverting relationships. Always combine 
+    statistical analysis with fundamental research and proper risk management.
+    """)
 
 if __name__ == "__main__":
     main()
